@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Webtoon/Manga Auto Scroller
 // @namespace    http://tampermonkey.net/
-// @version      3.3.1
+// @version      3.3.2
 // @description  Auto-scroll that speeds through empty panels and slows down on busy art and dialogue
 // @author       You
 // @match        *://weebcentral.com/chapters/*
@@ -10,7 +10,8 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
-// @connect      *
+// @connect      official.lowee.us
+// @connect      weebcentral.com
 // @updateURL    https://raw.githubusercontent.com/thekindlyone/Scrolly/claude/new-session-rsc332/auto-scroller.user.js
 // @downloadURL  https://raw.githubusercontent.com/thekindlyone/Scrolly/claude/new-session-rsc332/auto-scroller.user.js
 // ==/UserScript==
