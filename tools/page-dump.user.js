@@ -1,16 +1,18 @@
 // ==UserScript==
 // @name         Weeb Central page dump (one-off, for testing the auto scroller)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Adds a "Dump" button. Saves the rendered chapter page plus lazy-load facts as a JSON download.
 // @match        *://weebcentral.com/chapters/*
 // @match        *://*.weebcentral.com/chapters/*
 // @noframes
-// @grant        none
+// @grant        GM_registerMenuCommand
+// @run-at       document-idle
 // ==/UserScript==
 
 // Use: open a chapter in Long Strip mode, wait for the first pages to show,
-// tap "Dump" (bottom-left), and send the downloaded weebcentral-dump-*.json file.
+// tap the green "Dump" button (top-left), or pick "Dump page" from the Tampermonkey
+// menu, and send the downloaded weebcentral-dump-*.json file.
 // It only reads this page; nothing is sent anywhere. Disable it afterwards.
 (function () {
     'use strict';
@@ -54,10 +56,16 @@
         setTimeout(() => { btn.textContent = 'Dump'; }, 2000);
     }
 
+    // Fallback that can't be hidden by the page: Tampermonkey menu entry.
+    try { GM_registerMenuCommand('Dump page', dump); } catch (e) { /* ignore */ }
+
     const btn = document.createElement('button');
     btn.textContent = 'Dump';
-    btn.style.cssText = 'position:fixed;left:12px;bottom:20px;z-index:9999999;padding:10px 14px;' +
-        'border-radius:20px;border:none;background:#2a6;color:#fff;font:bold 14px sans-serif;';
+    btn.style.cssText = 'position:fixed;left:12px;top:70px;z-index:2147483647;padding:10px 14px;' +
+        'border-radius:20px;border:2px solid #fff;background:#2a6;color:#fff;font:bold 14px sans-serif;';
     btn.addEventListener('click', dump);
-    document.body.appendChild(btn);
+    // The site may swap the page body after load; keep putting the button back.
+    const attach = () => { if (document.body && !btn.isConnected) document.body.appendChild(btn); };
+    attach();
+    setInterval(attach, 1000);
 })();
