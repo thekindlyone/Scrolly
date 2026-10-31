@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Webtoon/Manga Auto Scroller
 // @namespace    http://tampermonkey.net/
-// @version      3.2
+// @version      3.3
 // @description  Auto-scroll that speeds through empty panels and slows down on busy art and dialogue
 // @author       You
 // @match        *://weebcentral.com/chapters/*
@@ -212,7 +212,7 @@
     function cycleAuto() {
         autoLevel = (autoLevel + 1) % LEVELS.length;
         GM_setValue('auto_level', autoLevel);
-        if (autoLevel) nearImgs.forEach(enqueue);
+        if (autoLevel) nearImgs.forEach((img) => { loadEarly(img); enqueue(img); });
         sample();
         updateAutoBtn();
     }
@@ -236,8 +236,21 @@
         $('tm-scroll-pace').textContent = gamma ? Math.round(factor * 100) + '%' : '';
     }
 
-    function isCandidate(r) {
+    function isLoaded(img) {
+        return img.complete && img.naturalWidth > 0;
+    }
+
+    // Weeb Central gives not-yet-loaded pages no width/height, only a 50vh-tall,
+    // zero-width placeholder. Those count as unknown content, not as an empty gap.
+    function isCandidate(img, r) {
+        if (!isLoaded(img)) return r.height >= CFG.MIN_IMG_H;
         return r.width >= window.innerWidth * CFG.MIN_IMG_W_FRAC && r.height >= CFG.MIN_IMG_H;
+    }
+
+    // Firefox only starts lazy images a few hundred px ahead, too late to analyse
+    // them before they scroll in. Load the ones within the look-ahead now.
+    function loadEarly(img) {
+        if (LEVELS[autoLevel] && img.loading === 'lazy') img.loading = 'eager';
     }
 
     function avgRows(rows, f0, f1) {
@@ -271,7 +284,7 @@
 
         for (const img of nearImgs) {
             const r = img.getBoundingClientRect();
-            if (r.bottom <= bt || r.top >= bb || r.height <= 0 || !isCandidate(r)) continue;
+            if (r.bottom <= bt || r.top >= bb || r.height <= 0 || !isCandidate(img, r)) continue;
             const p = profiles.get(img);
             const fresh = p && p.src === img.currentSrc;
             if (!fresh) enqueue(img);
@@ -333,8 +346,8 @@
         if (!LEVELS[autoLevel] || queued.has(img)) return;
         const p = profiles.get(img);
         if (p && p.src === img.currentSrc) return;
-        if (!img.complete || !img.naturalWidth) return; // 'load' listener retries
-        if (!isCandidate(img.getBoundingClientRect())) return;
+        if (!isLoaded(img)) return; // 'load' listener retries
+        if (!isCandidate(img, img.getBoundingClientRect())) return;
         queued.add(img);
         queue.push(img);
         pump();
@@ -491,7 +504,7 @@
     // Watch images a few screens ahead so they're analysed before they arrive
     const imgIO = new IntersectionObserver((entries) => {
         for (const e of entries) {
-            if (e.isIntersecting) { nearImgs.add(e.target); enqueue(e.target); }
+            if (e.isIntersecting) { nearImgs.add(e.target); loadEarly(e.target); enqueue(e.target); }
             else nearImgs.delete(e.target);
         }
     }, { rootMargin: '100% 0px 300% 0px' });

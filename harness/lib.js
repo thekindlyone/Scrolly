@@ -18,11 +18,11 @@ const CDN = 'https://official.lowee.us/manga/';
 const READER = 'http://reader.test/chapters/';
 
 const PHONE = {
-    viewport: { width: 412, height: 780 },
-    deviceScaleFactor: 2.625,
+    viewport: { width: 378, height: 771 },   // measured on the owner's phone (Firefox 159, Android)
+    deviceScaleFactor: 2.857,
     isMobile: true,
     hasTouch: true,
-    userAgent: 'Mozilla/5.0 (Android 14; Mobile; rv:131.0) Gecko/131.0 Firefox/131.0',
+    userAgent: 'Mozilla/5.0 (Android 17; Mobile; rv:159.0) Gecko/159.0 Firefox/159.0',
 };
 
 function parseArgs(argv, defaults) {
@@ -78,10 +78,25 @@ function urlToFile(url) {
 // Approximation of Weeb Central's long-strip reader markup: a top bar, the page
 // images (lazy-loaded, same alt/class as the live site), then chapter navigation
 // and a comment section whose text is hidden behind "Click to reveal".
-function readerHtml(chapter, pages) {
+function readerHtml(chapter, pages, { fxLazy = 600 } = {}) {
+    // Same <img> markup as the live page (captured with tools/page-dump.user.js):
+    // no width/height; a 50vh-tall, zero-width placeholder until the image loads.
+    // With fxLazy, the src is held back and set by a small loader that starts images
+    // fxLazy px ahead like Firefox does (Chromium starts them much earlier), and
+    // loads at once if the script switches loading="lazy" to "eager".
+    const srcAttr = fxLazy ? 'data-src' : 'src';
     const imgs = pages.map((p) =>
-        `<img src="${p.url}" alt="Page ${p.n}" class="max-w-full h-auto mx-auto" loading="lazy" width="${p.w}" height="${p.h}">`
+        `<img ${srcAttr}="${p.url}" class="max-w-full h-auto mx-auto" style="min-height: 50vh" alt="Page ${p.n}" decoding="async" loading="lazy" onload="this.style.minHeight=''">`
     ).join('\n');
+    const loader = fxLazy ? `<script>(() => {
+  const go = (img) => { if (img.dataset.src && !img.getAttribute('src')) img.src = img.dataset.src; };
+  const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { go(e.target); io.unobserve(e.target); } }),
+    { rootMargin: '0px 0px ${fxLazy}px 0px' });
+  const imgs = document.querySelectorAll('#chapter-images img');
+  imgs.forEach((img) => io.observe(img));
+  new MutationObserver((ms) => ms.forEach((m) => { if (m.target.loading === 'eager') go(m.target); }))
+    .observe(document.getElementById('chapter-images'), { subtree: true, attributeFilter: ['loading'] });
+})();</script>` : '';
     return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${chapter} | Weeb Central (local stand-in)</title>
@@ -90,19 +105,21 @@ function readerHtml(chapter, pages) {
  header{position:sticky;top:0;z-index:5;background:#111;padding:12px 16px;display:flex;justify-content:space-between}
  .max-w-full{max-width:100%}.h-auto{height:auto}.mx-auto{margin-left:auto;margin-right:auto}
  img{display:block}
- section.strip{display:flex;flex-direction:column}
+ #chapter-images{display:flex;flex-direction:column}
+ .chapter-nav{height:250px;padding:16px;box-sizing:border-box}
  nav,footer{padding:16px}
- .reveal{background:#333;padding:12px;border-radius:6px;margin:8px 0}
- .hidden{display:none}
+ .btn{width:100%;padding:12px;border-radius:6px;background:#333;color:#ddd;border:0}
 </style></head><body>
 <header><span>☰ Weeb Central</span><span>Episode · Preferences</span></header>
-<main><section class="strip">
+<main>
+<section class="chapter-nav"><p>The Extra's Academy Survival Guide</p><p>‹ Episode ›</p></section>
+<section id="chapter-images">
 ${imgs}
 </section>
+<section style="padding:16px"><button class="btn">Click to reveal comments</button></section>
 <nav><button>Previous</button> <button>Next</button></nav>
-<footer><h3>Comments</h3>
-<div class="reveal">Click to reveal<div class="hidden">${'Lorem ipsum dolor sit amet. '.repeat(60)}</div></div>
-<p>© Weeb Central</p></footer></main>
+<footer><p>© Weeb Central</p></footer></main>
+${loader}
 </body></html>`;
 }
 
@@ -137,14 +154,14 @@ function scriptSource(cfg) {
     return src;
 }
 
-async function openReader({ chapter, seed = {}, latencyMs = 120, cpu = 1, headless = true }) {
+async function openReader({ chapter, seed = {}, latencyMs = 120, cpu = 1, headless = true, fxLazy = 600 }) {
     const pages = chapterPages(chapter);
     const browser = await chromium.launch({ headless });
     const context = await browser.newContext(PHONE);
     const net = { imgRequests: 0, gmRequests: 0, gmBytes: 0 };
 
     await context.route(READER + '**', (route) =>
-        route.fulfill({ status: 200, contentType: 'text/html', body: readerHtml(chapter, pages) }));
+        route.fulfill({ status: 200, contentType: 'text/html', body: readerHtml(chapter, pages, { fxLazy }) }));
     await context.route(CDN + '**', async (route) => {
         net.imgRequests++;
         const f = urlToFile(route.request().url());

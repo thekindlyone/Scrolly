@@ -10,12 +10,12 @@ What the harness does instead:
 
 - The page images come from the real CDN (`official.lowee.us`). `fetch-chapter.sh` caches them on disk.
 - They are served at their real URLs, cross-origin, with **no CORS headers**, exactly like the live CDN. Canvas tainting and the `GM_xmlhttpRequest` re-download path are therefore exercised for real.
-- The chapter page (`http://reader.test/chapters/<slug>/<NNNN>`) imitates Weeb Central's long-strip reader: a sticky top bar, `<img alt="Page N" class="max-w-full h-auto mx-auto" loading="lazy">` for each page, then chapter navigation and a comment block hidden behind "Click to reveal".
-- Each `<img>` carries `width`/`height` attributes. Whether the live site does this hasn't been checked, so lazy-load behaviour on the real site still needs confirming on a device.
+- The chapter page (`http://reader.test/chapters/<slug>/<NNNN>`) copies the live long-strip markup, captured on a phone with `tools/page-dump.user.js`: images have no width/height, use `style="min-height: 50vh"` until loaded, and have an `onload` that clears it.
+- By default (`--fxlazy 600`) a small loader starts images 600 px ahead, like Firefox for Android does; Chromium's own lazy loading starts much earlier. The loader also loads an image at once if the script sets `loading="eager"`.
 
 Other substitutions:
 
-- **Browser:** only Playwright's Chromium is installed here, so runs use Chromium with phone emulation instead of Firefox: 412×780 viewport, DPR 2.625, touch, and an Android Firefox UA string.
+- **Browser:** only Playwright's Chromium is installed here, so runs use Chromium with phone emulation instead of Firefox: the owner's phone viewport (378×771, DPR 2.857), touch, and its Firefox 159 Android UA string.
 - **Phone CPU:** 4× CPU throttling via CDP (`--cpu 4`) stands in for a phone's slower CPU.
 - **Network:** each image and GM request gets 120 ms of added latency (`--latency`).
 

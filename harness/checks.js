@@ -52,7 +52,11 @@ const check = (name, ok, extra = '') => { results.push({ name, ok }); console.lo
     await page.waitForTimeout(800);
     check('no movement while paused', (await page.evaluate(() => scrollY)) === y0);
 
-    // Jump near the end and let it run off the bottom.
+    // Load every page first (so the page stops growing), then jump near the end.
+    await page.evaluate(() => Promise.all(Array.from(document.querySelectorAll('#chapter-images img'), (img) => {
+        img.loading = 'eager';
+        return img.complete && img.naturalWidth ? null : new Promise((r) => { img.addEventListener('load', r, { once: true }); });
+    })));
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight - innerHeight - 300));
     await page.mouse.click(...(await box('#tm-scroll-play')));
     await page.waitForTimeout(6000);

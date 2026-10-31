@@ -18,7 +18,7 @@ function cfgFromScript() {
 }
 
 // Page layout on a 412px-wide phone: images scaled to viewport width, stacked under a header.
-function layoutFor(pages, vw = 412, header = 45) {
+function layoutFor(pages, vw = 378, header = 364) {
     let top = header;
     return pages.map((p) => {
         const h = p.h * Math.min(1, vw / p.w) * (p.w > vw ? 1 : 1);
@@ -77,7 +77,7 @@ function targetFor({ I, T }, gamma, cfg) {
 }
 
 // Simulate a whole chapter. Returns per-sample trace and summary.
-function simulate(profiles, { auto = 2, speed = 2, vh = 780, cfg: over = {}, fps = 60 } = {}) {
+function simulate(profiles, { auto = 2, speed = 2, vh = 771, cfg: over = {}, fps = 60 } = {}) {
     const cfg = { ...DEFAULT_CFG, ...over };
     const layout = layoutFor(profiles.pages);
     const docH = layout[layout.length - 1].top + layout[layout.length - 1].h + 400;
@@ -135,5 +135,5 @@ if (require.main === module) {
     const o = parseArgs(process.argv.slice(2), { profiles: '', auto: 2, speed: 2, cfg: '' });
     const prof = JSON.parse(fs.readFileSync(o.profiles, 'utf8'));
     const r = simulate(prof, { auto: o.auto, speed: o.speed, cfg: o.cfg });
-    console.log(JSON.stringify({ auto: o.auto, speed: o.speed, cfg: o.cfg, ...score(r.trace, r.layout, 780) }));
+    console.log(JSON.stringify({ auto: o.auto, speed: o.speed, cfg: o.cfg, ...score(r.trace, r.layout, 771) }));
 }

@@ -34,6 +34,8 @@ for (const name of args) {
         'pace p5/50/95': `${q(paces, 0.05)}/${q(paces, 0.5)}/${q(paces, 0.95)}`,
         'step p95/max': `${q(steps, 0.95)}/${Math.max(0, ...steps)}`,
         'unknown>0%': +(100 * tele.filter((s) => s.unknown > 0.001).length / n).toFixed(1),
+        'blank>0%': +(100 * tele.filter((s) => s.blank > 0.01).length / n).toFixed(1),
+        'pace@blank': (() => { const b = tele.filter((s) => s.blank > 0.3); return b.length ? Math.round(b.reduce((a, s) => a + (s.pace || 100), 0) / b.length) : '-'; })(),
         failed: last.failed, analyzed: last.analyzed,
         'ms/img': last.analyzed ? +(last.analysisMs / (last.analyzed + last.failed)).toFixed(0) : '-',
         'GM MB': +(T.net.gmBytes / 1e6).toFixed(1),

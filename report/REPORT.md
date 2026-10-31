@@ -92,3 +92,36 @@ Kept unchanged: touch-outside pauses, the widget doesn't, wake lock while scroll
   - do one-word bubbles at about 2–3× feel rushed? If they do, lower `TEXT_REF` to about 0.008.
   - is the braking (up to about 1 pace-point per ms) acceptable?
 - **Real-device performance:** analysis time and battery or heat over a long session, and wake lock behaviour with battery saver on.
+
+## v3.3: findings from the live page dump (owner's phone, Firefox 159 on Android)
+
+`tools/page-dump.user.js` captured the real long-strip page on the owner's phone. What it showed:
+
+- **Screen:** 378×771 at DPR 2.86. Page 1 starts 364 px down the page.
+- **Image markup:** `<img class="max-w-full h-auto mx-auto" loading="lazy" decoding="async">` with **no width/height** attributes.
+- **Not-yet-loaded pages** are a zero-width, `min-height: 50vh` (385 px) placeholder. `onload` clears the min-height, and a page is 605 px tall once loaded.
+- **Firefox starts lazy images late:** only pages within about 300–900 px below the screen had loaded.
+
+**Bug found:** `isCandidate` required a width of at least 30% of the screen. Unloaded pages were therefore treated as empty gaps (information 0) instead of unknown content. The script would have sped up into pages that hadn't loaded yet.
+
+Fixes in v3.3:
+
+1. Unloaded images with a placeholder at least `MIN_IMG_H` tall count as unknown, so they run at base speed.
+2. With adaptive mode on, images inside the 3-screen look-ahead are switched from `loading="lazy"` to `"eager"`. They then load, and get analysed, before they scroll in.
+
+**Harness changes:**
+- The stand-in page now uses the real markup, the phone's viewport and UA, and a small loader that starts images 600 px ahead like Firefox (Chromium starts them much earlier).
+- Telemetry records `blank`: the share of the reading band covered by an unloaded placeholder.
+
+**v3.2 vs v3.3 on the realistic page** (A2, 4× CPU throttle):
+
+| conditions | version | unknown>0 | blank on screen | text>150% |
+|---|---|---|---|---|
+| speed 3, 300 ms per image | v3.2 | 0.3% | 0 | 0.5% |
+| | v3.3 | 0.1% | 0 | 0.6% |
+| speed 4, 1.5 s per image (weak mobile data) | v3.2 | **11.2%** | 0 | 0.4% |
+| | v3.3 | **3.5%** | 0 | 0.4% |
+
+Placeholders never reached the reading band in these runs. A 600 px head start covered even 1.5 s loads at these speeds, so fix 1 is a safety net for very slow connections or manual jumps.
+
+Fix 2 is the one that matters in practice. On a slow connection the page loads, then the script re-downloads it for analysis, so the latency is paid twice. Starting earlier removes most of the screens that ran at plain base speed for lack of analysis.

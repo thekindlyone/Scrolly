@@ -12,7 +12,7 @@ const { parseArgs, openReader, injectScript } = require('./lib');
 (async () => {
     const o = parseArgs(process.argv.slice(2), {
         chapter: 'the-extras-academy-survival-guide/0003', auto: 2, speed: 2, secs: 240,
-        cpu: 1, latency: 120, cfg: '', name: '', shots: 4, fast: 250, slow: 55,
+        cpu: 1, latency: 120, fxlazy: 600, cfg: '', name: '', shots: 4, fast: 250, slow: 55,
     });
     const name = o.name || `${o.chapter.split('/')[0].slice(0, 12)}-a${o.auto}-s${o.speed}`;
     const out = path.join(__dirname, 'out', 'runs', name);
@@ -20,7 +20,7 @@ const { parseArgs, openReader, injectScript } = require('./lib');
     fs.mkdirSync(path.join(out, 'shots'), { recursive: true });
 
     const { browser, page, net } = await openReader({
-        chapter: o.chapter, seed: { auto_level: o.auto, scroll_speed: o.speed }, latencyMs: o.latency, cpu: o.cpu,
+        chapter: o.chapter, seed: { auto_level: o.auto, scroll_speed: o.speed }, latencyMs: o.latency, cpu: o.cpu, fxLazy: o.fxlazy,
     });
     await injectScript(page, o.cfg);
 
@@ -33,17 +33,20 @@ const { parseArgs, openReader, injectScript } = require('./lib');
             const t = performance.now();
             const y = window.scrollY;
             const cy = window.innerHeight / 2;
-            let pg = null;
+            let pg = null, blank = 0;
+            const bt = innerHeight * 0.1, bb = innerHeight * 0.95;
             for (const img of document.querySelectorAll('img[alt^="Page"]')) {
                 const r = img.getBoundingClientRect();
-                if (r.top <= cy && r.bottom > cy) { pg = +img.alt.slice(5); break; }
+                if (r.top <= cy && r.bottom > cy) pg = +img.alt.slice(5);
+                // Unloaded placeholder in the reading band (ground truth, not the script's view).
+                if (!(img.complete && img.naturalWidth)) blank += Math.max(0, Math.min(bb, r.bottom) - Math.max(bt, r.top)) / (bb - bt);
             }
             const s = window.__tmScroll;
             tele.push({
                 t: +((t - t0) / 1000).toFixed(3), y, pxs: +((y - lastY) / ((t - lastT) / 1000)).toFixed(1),
                 pace: parseInt(document.getElementById('tm-scroll-pace').textContent, 10) || null,
                 info: +s.info.toFixed(4), unknown: +s.unknown.toFixed(3), queue: s.queue,
-                analyzed: s.analyzed, failed: s.failed, analysisMs: +s.analysisMs.toFixed(1), page: pg,
+                analyzed: s.analyzed, failed: s.failed, analysisMs: +s.analysisMs.toFixed(1), page: pg, blank: +blank.toFixed(3),
             });
             lastY = y; lastT = t;
         }, 250);
