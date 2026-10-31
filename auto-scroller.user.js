@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Webtoon/Manga Auto Scroller
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @description  Auto-scroll that speeds through empty panels and slows down on busy art and dialogue
 // @author       You
 // @match        *://weebcentral.com/chapters/*
@@ -17,7 +17,7 @@
     'use strict';
 
     // ---------------- Tunables ----------------
-    // Calibrated against a full Weeb Central chapter (148 pages, 800px wide).
+    // Calibrated on Weeb Central: The Extra's Academy ep. 3 (800px wide) and Solo Leveling: Ragnarok ch. 1 and 10 (940px).
     const CFG = {
         BAND_TOP: 0.10,         // part of the screen that counts as "being read"
         BAND_BOTTOM: 0.95,      // (lower half weighted more, so slowdown starts as content arrives)
@@ -27,8 +27,12 @@
         MIN_FACTOR: 0.3,        // slowest: 30% of base speed
         MAX_FACTOR: 3.5,        // fastest: 350% of base speed
         TEXT_WEIGHT: 2,         // speech-bubble text counts double vs. art
+        TEXT_REF: 0.0125,       // lettering (share of band cells, ~one 4-line bubble) that caps speed at 1x;
+                                // half as much allows 2x. Keeps a lone bubble on a blank frame from being rushed.
+        TEXT_TOP: 0.35,         // lettering above this screen height has already been read; don't let it hold speed down
         CHARS_REF: 600,         // HTML characters in the band that count as information 1
-        SMOOTH_MS: 450,         // how quickly speed eases toward its target
+        SMOOTH_UP_MS: 900,      // speeding up eases in gently...
+        SMOOTH_DOWN_MS: 350,    // ...slowing down for arriving content is quicker
         SAMPLE_MS: 250,         // how often the screen is re-measured
         ANALYSIS_W: 200,        // images are downscaled to this width for analysis
         CELL: 5,                // analysis cell size (px at analysis scale)
@@ -55,8 +59,10 @@
     let wakeLock = null;
 
     // Read-only stats for test harnesses (harmless inside Tampermonkey's sandbox)
-    const DBG = { info: 0, unknown: 0, queue: 0, analyzed: 0, failed: 0, analysisMs: 0 };
+    const DBG = { info: 0, text: 0, unknown: 0, queue: 0, analyzed: 0, failed: 0, analysisMs: 0 };
     try { window.__tmScroll = DBG; } catch (e) { /* ignore */ }
+    // Dev only: lets a test harness ask for the per-cell classification of an image.
+    try { if (window.__tmScrollDev) DBG.profile = (src, w, h) => { const cells = []; return { ...profileFrom(src, w, h, cells), cells }; }; } catch (e) { /* ignore */ }
 
     // ---------------- Wake lock ----------------
     async function requestWakeLock() {
@@ -160,7 +166,8 @@
         // Frame-rate independent: `speed` keeps its old meaning (px per frame at 60 Hz)
         const dt = lastTs ? Math.min(50, ts - lastTs) : 16.667;
         lastTs = ts;
-        factor += (targetFactor - factor) * Math.min(1, dt / CFG.SMOOTH_MS);
+        const tau = targetFactor > factor ? CFG.SMOOTH_UP_MS : CFG.SMOOTH_DOWN_MS;
+        factor += (targetFactor - factor) * Math.min(1, dt / tau);
 
         accumulatedDistance += speed * factor * (dt / 16.667);
         if (accumulatedDistance >= 1) {
@@ -213,14 +220,15 @@
     // ---------------- Measuring what's on screen ----------------
     const visibleText = new Set();
     const nearImgs = new Set();
-    const profiles = new WeakMap(); // img -> { src, rows: Float32Array (info per row) | null }
+    const profiles = new WeakMap(); // img -> { src, prof: { info, text } (Float32Array per cell row) | null }
 
     function sample() {
         const gamma = LEVELS[autoLevel];
         if (gamma) {
-            const I = measureInfo();
+            const { I, T } = measureInfo();
             const raw = Math.pow((CFG.INFO_REF + CFG.INFO_EPS) / (I + CFG.INFO_EPS), gamma);
-            targetFactor = Math.max(CFG.MIN_FACTOR, Math.min(CFG.MAX_FACTOR, raw));
+            const textCap = T > 0 ? Math.max(1, CFG.TEXT_REF / T) : Infinity;
+            targetFactor = Math.max(CFG.MIN_FACTOR, Math.min(CFG.MAX_FACTOR, textCap, raw));
         } else {
             targetFactor = 1;
         }
@@ -258,6 +266,7 @@
         const N = CFG.STRIPS;
         const bt = vh * CFG.BAND_TOP, bb = vh * CFG.BAND_BOTTOM, sh = (bb - bt) / N;
         const acc = new Float32Array(N);
+        const txt = new Float32Array(N);
         let unknown = 0;
 
         for (const img of nearImgs) {
@@ -266,14 +275,16 @@
             const p = profiles.get(img);
             const fresh = p && p.src === img.currentSrc;
             if (!fresh) enqueue(img);
-            const rows = fresh ? p.rows : null;
+            const prof = fresh ? p.prof : null;
             for (let s = 0; s < N; s++) {
                 const y0 = bt + s * sh, y1 = y0 + sh;
                 const o0 = Math.max(y0, r.top), o1 = Math.min(y1, r.bottom);
                 if (o1 <= o0) continue;
-                if (!rows) unknown += (o1 - o0) / sh;
-                const v = rows ? avgRows(rows, (o0 - r.top) / r.height, (o1 - r.top) / r.height) : CFG.INFO_REF;
-                acc[s] += v * ((o1 - o0) / sh);
+                const cover = (o1 - o0) / sh;
+                if (!prof) { unknown += cover; acc[s] += CFG.INFO_REF * cover; continue; }
+                const f0 = (o0 - r.top) / r.height, f1 = (o1 - r.top) / r.height;
+                acc[s] += avgRows(prof.info, f0, f1) * cover;
+                txt[s] += avgRows(prof.text, f0, f1) * cover;
             }
         }
 
@@ -286,22 +297,27 @@
             for (let s = 0; s < N; s++) {
                 const y0 = bt + s * sh, y1 = y0 + sh;
                 const ov = Math.min(y1, r.bottom) - Math.max(y0, r.top);
-                if (ov > 0) acc[s] += (chars * ov / r.height) / perStripChars;
+                if (ov <= 0) continue;
+                const v = (chars * ov / r.height) / perStripChars;
+                acc[s] += v;
+                txt[s] += v; // page text is something to read too
             }
         }
 
-        let sum = 0, wsum = 0;
+        let sum = 0, tsum = 0, wsum = 0;
         for (let s = 0; s < N; s++) {
             const y = (bt + (s + 0.5) * sh) / vh;
             const w = y < 0.5 ? 1 : 1 + (y - 0.5); // look ahead: lower part weighs more
             sum += acc[s] * w;
+            if (y >= CFG.TEXT_TOP) tsum += txt[s] * w;
             wsum += w;
         }
-        const I = wsum ? sum / wsum : CFG.INFO_REF;
+        const I = sum / wsum, T = tsum / wsum;
         DBG.info = I;
+        DBG.text = T;
         DBG.unknown = unknown / N;
         DBG.queue = queue.length;
-        return I;
+        return { I, T };
     }
 
     // ---------------- Image analysis ----------------
@@ -331,12 +347,12 @@
         const idle = window.requestIdleCallback || ((f) => setTimeout(f, 30));
         idle(async () => {
             const src = img.currentSrc;
-            let rows = null;
+            let prof = null;
             const t0 = performance.now();
-            try { rows = await analyze(img); } catch (e) { /* unreadable: treated as typical */ }
+            try { prof = await analyze(img); } catch (e) { /* unreadable: treated as typical */ }
             DBG.analysisMs += performance.now() - t0;
-            if (rows) DBG.analyzed++; else DBG.failed++;
-            profiles.set(img, { src, rows });
+            if (prof) DBG.analyzed++; else DBG.failed++;
+            profiles.set(img, { src, prof });
             queued.delete(img);
             working = false;
             pump();
@@ -381,15 +397,16 @@
     }
 
     // Per row of cells: share of busy (non-flat, edgy) cells + weighted share of text-like cells.
-    function profileFrom(source, nw, nh) {
+    function profileFrom(source, nw, nh, devCells) {
         const C = CFG.CELL;
         const aw = Math.min(CFG.ANALYSIS_W, nw);
         const scale = aw / nw;
         const ah = Math.max(1, Math.round(nh * scale));
         const cols = Math.floor(aw / C);
         const nRows = Math.ceil(ah / C);
-        const rows = new Float32Array(nRows);
-        if (!cols) return rows;
+        const info = new Float32Array(nRows);
+        const textRows = new Float32Array(nRows);
+        if (!cols) return { info, text: textRows };
 
         canvas.width = aw;
         const chunkCells = Math.floor(CFG.CHUNK_H / C);
@@ -411,17 +428,22 @@
             }
             for (let cy = 0; cy < rc; cy++) {
                 let art = 0, text = 0;
+                const devRow = devCells ? [] : null;
                 for (let cx = 0; cx < cols; cx++) {
                     const i = cy * cols + cx;
                     art += busy[i];
-                    // Lettering comes in runs; drop isolated hits from line art.
-                    if (texty[i] && ((cx > 0 && texty[i - 1]) || (cx < cols - 1 && texty[i + 1]) ||
-                        (cy > 0 && texty[i - cols]) || (cy < rc - 1 && texty[i + cols]))) text++;
+                    // Lettering comes in horizontal runs. Requiring a left/right neighbour drops
+                    // isolated hits and vertical lines (panel borders, bubble sides).
+                    const t = texty[i] && ((cx > 0 && texty[i - 1]) || (cx < cols - 1 && texty[i + 1]));
+                    if (t) text++;
+                    if (devRow) devRow.push(t ? 2 : busy[i] > 0 ? 1 : 0);
                 }
-                rows[r0 + cy] = (art + CFG.TEXT_WEIGHT * text) / cols;
+                info[r0 + cy] = (art + CFG.TEXT_WEIGHT * text) / cols;
+                textRows[r0 + cy] = text / cols;
+                if (devRow) devCells.push(devRow);
             }
         }
-        return rows;
+        return { info, text: textRows };
     }
 
     function cellStats(d, w, h, x0, y0, C, busy, texty, idx) {
