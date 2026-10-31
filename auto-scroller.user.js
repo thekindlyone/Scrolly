@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Webtoon/Manga Auto Scroller
 // @namespace    http://tampermonkey.net/
-// @version      3.3.2
+// @version      3.3.3
 // @description  Auto-scroll that speeds through empty panels and slows down on busy art and dialogue
 // @author       You
 // @match        *://weebcentral.com/chapters/*
@@ -12,6 +12,7 @@
 // @grant        GM_xmlhttpRequest
 // @connect      official.lowee.us
 // @connect      weebcentral.com
+// @connect      *
 // @updateURL    https://raw.githubusercontent.com/thekindlyone/Scrolly/claude/new-session-rsc332/auto-scroller.user.js
 // @downloadURL  https://raw.githubusercontent.com/thekindlyone/Scrolly/claude/new-session-rsc332/auto-scroller.user.js
 // ==/UserScript==
@@ -386,7 +387,10 @@
                 directBlocked.add(origin);
             }
         }
-        if (!CFG.ALLOW_REFETCH || src.startsWith('blob:')) return null;
+        // Only ever re-download the exact image the site put on the page and the
+        // browser already loaded (enqueue() checks that), over http(s). The host is
+        // whatever the site points to, so a CDN change needs no script update.
+        if (!CFG.ALLOW_REFETCH || !isLoaded(img) || !/^https?:$/.test(new URL(src).protocol)) return null;
         const bmp = await fetchBitmap(src);
         try {
             return profileFrom(bmp, bmp.width, bmp.height);
