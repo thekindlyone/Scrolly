@@ -125,3 +125,14 @@ Fixes in v3.3:
 Placeholders never reached the reading band in these runs. A 600 px head start covered even 1.5 s loads at these speeds, so fix 1 is a safety net for very slow connections or manual jumps.
 
 Fix 2 is the one that matters in practice. On a slow connection the page loads, then the script re-downloads it for analysis, so the latency is paid twice. Starting earlier removes most of the screens that ran at plain base speed for lack of analysis.
+
+## v3.3.5: why adaptation did nothing on Firefox, found on the live site
+
+On the owner's phone the pace never changed. To reproduce it, I drove real Firefox 159 with real Tampermonkey 5.5 on the live `weebcentral.com` chapter (`harness/firefox/`). Every analysis failed with `The operation is insecure.`, and pace sat at about 35%. Two bugs caused this. Neither one could show up in Chromium on the stand-in page.
+
+1. **The shared analysis canvas got tainted for good.** For each image host, `analyze()` first tries reading the page `<img>` directly. The image is cross-origin, so drawing it taints the canvas. The script then re-downloads the image with `GM_xmlhttpRequest`, but drew the new bitmap onto that same canvas. Firefox keeps a canvas tainted even after it's resized, so every later read threw `SecurityError` (Chromium appears to reset it on resize). A probe userscript confirmed that each decode route (ImageBitmap from the GM Blob, object URL, data URL, page-side Blob, OffscreenCanvas) reads fine on a fresh canvas. **Fix:** after a failed direct read, replace the canvas with a fresh one.
+2. **Hidden modals counted as text to read.** Weeb Central keeps its preferences, report and "Verification Required" dialogs fixed over the page with `visibility: hidden`. `IntersectionObserver` still reports them as on screen, so about 300 characters of menu text were added to every measurement: lettering read about 0.59 (50× `TEXT_REF`), and screen info about 1.1. That held pace at about 35% even with every image unanalysed. **Fix:** page text is only counted when `checkVisibility({visibilityProperty, opacityProperty})` says it's shown.
+
+**After the fixes** (same live chapter, A2, speed 2, 90 s, Android UA): analysed 16 and failed 0, last error none, unknown 0.00. Pace ranged from 52% to 259% (most samples 60–100%, peaks on empty frames), and lettering read 0–0.13 from the images alone. Analysis took about 215–360 ms per image wall time, mostly the re-download.
+
+**Still for the phone:** install v3.3.5 and read the diagnostics popup. Tampermonkey shows a one-time permission prompt if a title's images come from a host that `@connect` doesn't name (only `official.lowee.us` and `weebcentral.com` are named).

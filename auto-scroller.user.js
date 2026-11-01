@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Webtoon/Manga Auto Scroller
 // @namespace    http://tampermonkey.net/
-// @version      3.3.4
+// @version      3.3.5
 // @description  Auto-scroll that speeds through empty panels and slows down on busy art and dialogue
 // @author       You
 // @match        *://weebcentral.com/chapters/*
@@ -269,6 +269,13 @@
         return sum / (re - rs);
     }
 
+    // Weeb Central keeps its modals (preferences, report, sign-in) over the page with
+    // visibility: hidden, and IntersectionObserver still reports them as on screen.
+    function isShown(el) {
+        if (el.checkVisibility) return el.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+        return getComputedStyle(el).visibility !== 'hidden';
+    }
+
     function directTextLength(el) {
         let n = 0;
         for (const c of el.childNodes) {
@@ -309,7 +316,7 @@
         const perStripChars = CFG.CHARS_REF / N;
         for (const el of visibleText) {
             const r = el.getBoundingClientRect();
-            if (r.height <= 0 || r.bottom <= bt || r.top >= bb) continue;
+            if (r.height <= 0 || r.bottom <= bt || r.top >= bb || !isShown(el)) continue;
             const chars = directTextLength(el);
             if (!chars) continue;
             for (let s = 0; s < N; s++) {
@@ -344,8 +351,14 @@
     const directBlocked = new Set();
     let working = false;
 
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let canvas, ctx;
+    // A canvas that once had a cross-origin image drawn on it stays tainted in
+    // Firefox, even after resizing, so a failed direct read needs a fresh one.
+    function newCanvas() {
+        canvas = document.createElement('canvas');
+        ctx = canvas.getContext('2d', { willReadFrequently: true });
+    }
+    newCanvas();
 
     function enqueue(img) {
         if (!LEVELS[autoLevel] || queued.has(img)) return;
@@ -386,6 +399,7 @@
             } catch (e) {
                 if (e.name !== 'SecurityError') throw e;
                 directBlocked.add(origin);
+                newCanvas();
             }
         }
         // Only ever re-download the exact image the site put on the page and the
