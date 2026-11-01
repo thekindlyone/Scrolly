@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Webtoon/Manga Auto Scroller
 // @namespace    http://tampermonkey.net/
-// @version      3.3.3
+// @version      3.3.4
 // @description  Auto-scroll that speeds through empty panels and slows down on busy art and dialogue
 // @author       You
 // @match        *://weebcentral.com/chapters/*
@@ -10,6 +10,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
 // @connect      official.lowee.us
 // @connect      weebcentral.com
 // @connect      *
@@ -63,7 +64,7 @@
     let wakeLock = null;
 
     // Read-only stats for test harnesses (harmless inside Tampermonkey's sandbox)
-    const DBG = { info: 0, text: 0, unknown: 0, queue: 0, analyzed: 0, failed: 0, analysisMs: 0 };
+    const DBG = { info: 0, text: 0, unknown: 0, queue: 0, analyzed: 0, failed: 0, analysisMs: 0, lastError: '' };
     try { window.__tmScroll = DBG; } catch (e) { /* ignore */ }
     // Dev only: lets a test harness ask for the per-cell classification of an image.
     try { if (window.__tmScrollDev) DBG.profile = (src, w, h) => { const cells = []; return { ...profileFrom(src, w, h, cells), cells }; }; } catch (e) { /* ignore */ }
@@ -366,7 +367,7 @@
             const src = img.currentSrc;
             let prof = null;
             const t0 = performance.now();
-            try { prof = await analyze(img); } catch (e) { /* unreadable: treated as typical */ }
+            try { prof = await analyze(img); } catch (e) { DBG.lastError = errText(e); } // unreadable: treated as typical
             DBG.analysisMs += performance.now() - t0;
             if (prof) DBG.analyzed++; else DBG.failed++;
             profiles.set(img, { src, prof });
@@ -390,7 +391,10 @@
         // Only ever re-download the exact image the site put on the page and the
         // browser already loaded (enqueue() checks that), over http(s). The host is
         // whatever the site points to, so a CDN change needs no script update.
-        if (!CFG.ALLOW_REFETCH || !isLoaded(img) || !/^https?:$/.test(new URL(src).protocol)) return null;
+        if (!CFG.ALLOW_REFETCH || !isLoaded(img) || !/^https?:$/.test(new URL(src).protocol)) {
+            DBG.lastError = 'not re-downloadable: ' + src.slice(0, 80);
+            return null;
+        }
         const bmp = await fetchBitmap(src);
         try {
             return profileFrom(bmp, bmp.width, bmp.height);
@@ -408,10 +412,10 @@
                 headers: { Referer: location.href },
                 timeout: 20000,
                 onload: (r) => (r.status >= 200 && r.status < 300 && r.response)
-                    ? createImageBitmap(r.response).then(resolve, reject)
-                    : reject(new Error('HTTP ' + r.status)),
-                onerror: reject,
-                ontimeout: reject,
+                    ? createImageBitmap(r.response).then(resolve, (e) => reject(new Error('decode: ' + errText(e))))
+                    : reject(new Error('HTTP ' + r.status + (r.response ? '' : ' (empty response)'))),
+                onerror: (r) => reject(new Error('download failed: ' + ((r && (r.error || r.statusText)) || 'blocked or offline'))),
+                ontimeout: () => reject(new Error('download timed out')),
             });
         });
     }
@@ -560,6 +564,31 @@
     $('tm-scroll-inc').addEventListener('click', () => changeSpeed(0.5));
     $('tm-scroll-dec').addEventListener('click', () => changeSpeed(-0.5));
     $('tm-scroll-auto').addEventListener('click', cycleAuto);
+    $('tm-scroll-label').addEventListener('click', showDiagnostics); // tap the speed text
+    try { GM_registerMenuCommand('Auto scroller diagnostics', showDiagnostics); } catch (e) { /* ignore */ }
+
+    function errText(e) {
+        return String((e && (e.message || e.name)) || e).slice(0, 200);
+    }
+
+    function showDiagnostics() {
+        let pageImgs = 0, loaded = 0;
+        for (const img of document.querySelectorAll('img')) {
+            if (!/^Page /.test(img.alt || '')) continue;
+            pageImgs++;
+            if (isLoaded(img)) loaded++;
+        }
+        const avgMs = DBG.analyzed + DBG.failed ? Math.round(DBG.analysisMs / (DBG.analyzed + DBG.failed)) : 0;
+        alert([
+            'Auto scroller ' + (typeof GM_info !== 'undefined' ? GM_info.script.version : ''),
+            'Adaptive level: ' + (autoLevel ? 'A' + autoLevel : 'off') + '   speed ' + speed + 'x',
+            'Pace now: ' + Math.round(factor * 100) + '%  (target ' + Math.round(targetFactor * 100) + '%)',
+            'Screen info: ' + DBG.info.toFixed(3) + '   lettering: ' + DBG.text.toFixed(4) + '   unknown: ' + DBG.unknown.toFixed(2),
+            'Page images: ' + pageImgs + ' (' + loaded + ' loaded), watched nearby: ' + nearImgs.size,
+            'Analysed: ' + DBG.analyzed + '   failed: ' + DBG.failed + '   queued: ' + queue.length + '   avg ' + avgMs + ' ms',
+            'Last error: ' + (DBG.lastError || 'none'),
+        ].join('\n'));
+    }
 
     window.addEventListener('touchstart', (e) => {
         if (!panel.contains(e.target) && isScrolling) toggleScroll(false);
